@@ -1,0 +1,8 @@
+langchain==0.1.10
+langchain-community==0.0.25
+langchain-core==0.1.28
+langsmith==0.1.14
+bs4==0.0.2
+chromadb==0.4.24
+gradio==4.19.2
+tiktoken==0.6.0
