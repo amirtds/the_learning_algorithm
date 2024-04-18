@@ -239,4 +239,4 @@ def main():
 
 # Launch the interface
 if __name__ == "__main__":
-    main().launch(show_api=False)
+    main().launch(show_api=True)
