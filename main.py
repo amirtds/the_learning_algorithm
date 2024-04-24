@@ -17,7 +17,7 @@ ids = None
 global_is_product_review = "No"
 
 # Load LLM model
-model_local = ChatOllama(model="mistral")
+model_local = ChatOllama(model="llama3")
 
 def is_youtube_url(url):
     """Check if the given URL is a YouTube URL."""
@@ -82,19 +82,42 @@ def generate_learning_material():
         """ 
     else:
         template = """
-            Assist in learning from a technical document by performing the following tasks in markdown format, only based on the following context:
+            You are the best software engineering instructor and is the most famous one who can explain complex topic in simple way that everyone can understand and also provides great examples for topic,
+            I need your help in creating an easy to understand, engaging and detailed course only based on the following context:
             Context:\n{context}
-            - Summarize: Summarize the main topics covered in the context. Aim for simple explanation, engaging and clarity and brevity to capture the essence of the content.
-            - Explain with Code: Select key concepts from the document and demonstrate each with a relevant code snippet. Provide a brief explanation for how each snippet exemplifies the concept, ensuring the explanation enhances understanding.
-            - Verify Understanding:
-                - Craft a few multiple-choice questions that quiz on the document's main points.
-                - Include true/false questions that address key insights, ensuring to back up answers with concise explanations.
+            Some of the aspect of the course should be:
+            - Summarization: Summarize the main topics covered in the context. Aim for simple explanation, engaging and clarity and brevity to capture the essence of the content.
+            - Explanation with Code: Select key concepts from the document and demonstrate each with a relevant code snippet. Provide a brief explanation for how each snippet exemplifies the concept, ensuring the explanation enhances understanding.
+            - Verify Understanding using questions and answers
             - Engage with Hands-on Coding:
                 - Propose coding challenges that require applying knowledge from the document. Challenges could range from debugging exercises to developing new code based on the concepts learned.
                 - For each challenge, include context and specify what success looks like. If appropriate, provide starter code and a solution for self-verification.
-            The ultimate aim is to create a learning tool that ensures comprehension of the context content through a mix of summarization, theoretical questions, and practical, hands-on coding exercises. This approach should be being clear, concise, explain as simple as possible, and practical, often focusing on real-world applications of programming concepts.
-            Important: Make sure you provide answers to all the questions, answers should be collapsable and default should be hidden so users uncollapse it to see the answer.
-            Make sure use markdown styling to make the content visually appealing and easy to follow. make titles bigger, highlight important parts. have good amount of separation and spacing between sections.
+
+            The course should be in markdown format (don't add ```markdown in the beginning of the content you are providing, nor ``` at the end of the content, i only need markdown syntax) and following a precise hierarchy. 
+            The course should have 3 level hierarchy, we have sections which are heading 2, we have subsections which are heading 3 and the learning content, like text, code snippet, images etc which are inside the heading 3 (subsections).
+            Each section and subsection should have engaging and explainatory name and each course only have one heading 1 which is used as course name, an example of the course hirearchy is 
+            ------
+            # Python for beginners
+            ## Introduction
+            ### Some of Python's notable feature
+                Python is a clear and powerful object-oriented programming language, comparable to Perl, Ruby, Scheme, or Java.
+                - Uses an elegant syntax, making the programs you write easier to read.
+                - Is an easy-to-use language that makes it simple to get your program working. This makes Python ideal for prototype development and other ad-hoc programming tasks, without compromising maintainability.
+                - Comes with a large standard library that supports many common programming tasks such as connecting to web servers, searching text with regular expressions, reading and modifying files.
+                - Python's interactive mode makes it easy to test short snippets of code. There's also a bundled development environment called IDLE.
+                - Is easily extended by adding new modules implemented in a compiled language such as C or C++.
+            we repeat the same patter for heading 2, heading 3 and content. content never goes out of the heading 3.
+            ------
+            At the end of the course please provide a couple of coding practices 
+            Coding practices sections should be like
+            ## Coding practice
+            ### Practice title
+            content of the practice
+            ------
+            Remember:
+            - The course must contain exactly one H1 heading.
+            - Multiple H2 headings (sections) and H3 headings (subsections) are allowed and expected.
+            - All educational content, including text, code, practices, and quizzes, should be within an H3 heading (subsections).
         """ 
 
     prompt = ChatPromptTemplate.from_template(template)
@@ -192,8 +215,7 @@ def main():
             gr.Examples(
                 examples=[
                     ["https://docs.python.org/3/whatsnew/3.12.html"], 
-                    ["https://www.youtube.com/watch?v=NkVSSMt-h3Y"],
-                    ["https://strapi.io"]
+                    ["https://www.youtube.com/watch?v=-BOBedcjySI"],
                 ],
                 inputs=url_input
             )
