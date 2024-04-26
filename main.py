@@ -1,4 +1,13 @@
+import time
+import logging
+import requests
+import hashlib
+import os
 import gradio as gr
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse, urljoin
+from fake_useragent import UserAgent
+
 from langchain_community.document_loaders import WebBaseLoader, YoutubeLoader
 from langchain_community.vectorstores import Chroma
 from langchain_community import embeddings
@@ -19,58 +28,140 @@ global_is_product_review = "No"
 # Load LLM model
 model_local = ChatOllama(model="llama3")
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def safe_request(url):
+    """Fetch the webpage content using a randomized user-agent to simulate different browsers."""
+    try:
+        ua = UserAgent()
+        headers = {'User-Agent': ua.random}
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        return response.text
+    except requests.RequestException as e:
+        logging.error(f"Request failed for {url}: {e}")
+        return None
+
 def is_youtube_url(url):
     """Check if the given URL is a YouTube URL."""
     return "youtube.com" in url or "youtu.be" in url
 
-def prepare_embeddings(urls, is_product_review):    
+def is_valid_url(url):
+    """Check if the URL is a valid webpage link and not a mailto, tel, or social media link, and does not contain fragments."""
+    parsed = urlparse(url)
+    # Check if the URL has a fragment and exclude it if it does
+    if parsed.fragment:
+        return False
+    if parsed.scheme not in ["http", "https"]:
+        return False
+    if 'mailto:' in url or 'tel:' in url:
+        return False
+    netloc = parsed.netloc.lower()
+    social_media_domains = [
+        'facebook.com', 'twitter.com', 'instagram.com', 'linkedin.com',
+        'pinterest.com', 'youtube.com', 'tiktok.com', 'snapchat.com'
+    ]
+    if any(domain in netloc for domain in social_media_domains):
+        return False
+    return True
+
+def fetch_all_links(url, all_links=None, visited=None):
+    """Fetch links from the given URL without depth control but avoiding cycles and unnecessary URL fragments."""
+    if visited is None:
+        visited = set()
+    if all_links is None:
+        all_links = set()
+
+    if url in visited:
+        logging.info(f'Skipping {url} as it is already visited.')
+        return all_links
+    
+    visited.add(url)
+    logging.info(f'Fetching links from: {url}')
+
+    # Use the safe_request function to get the webpage content
+    html = safe_request(url)
+    if html is None:
+        return all_links  # If fetching fails, return the current state of all_links
+
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+        base_url = urlparse(url).netloc
+        for link in soup.find_all('a', href=True):
+            full_link = urljoin(url, link.get('href'))
+            if is_valid_url(full_link) and urlparse(full_link).netloc == base_url and full_link not in visited:
+                all_links.add(full_link)
+                logging.info(f'Fetching new link: {full_link}')
+                fetch_all_links(full_link, all_links, visited)
+                time.sleep(1)  # Sleep to be polite and avoid hitting rate limits
+    except Exception as e:
+        logging.error(f"Error processing links from {url}: {e}")
+
+    return all_links
+
+def prepare_embeddings(root_url, is_product_review):
     global retriever, vectorstore, ids, global_is_product_review
     global_is_product_review = is_product_review
+    
+    # Determine the directory to check or save the processed documents
+    persist_directory = './chroma_db'
     # Load embedding models
-    embedding = embeddings.ollama.OllamaEmbeddings(model='nomic-embed-text')
+    embedding_function = embeddings.ollama.OllamaEmbeddings(model='nomic-embed-text')
 
-    urls_list = urls.split("\n")
-    docs_list = []  # This will aggregate all documents from both web and YouTube sources
+    # Check if data already exists
+    if os.path.exists(persist_directory):
+        print(f"Loading data from {persist_directory}")
+        vectorstore = Chroma(
+            persist_directory=persist_directory,
+            collection_name="appSignal",
+            embedding_function=embedding_function,
+        )
+        retriever = vectorstore.as_retriever()
+        return "Loaded existing data successfully."
+    else:
+        print(f"No existing data found for {root_url}, fetching and processing new content.")
+        urls_list = fetch_all_links(root_url)
+        docs_list = []
 
-    for url in urls_list:
-        try:
+        for url in urls_list:
             if is_youtube_url(url):
                 docs = YoutubeLoader.from_youtube_url(url, add_video_info=False).load()
-                # Assuming docs is a list of transcripts or a single transcript string
                 if isinstance(docs, list):
                     docs_list.extend(docs)
                 else:
                     docs_list.append(docs)
             else:
                 docs = WebBaseLoader(url).load()
-                # Assuming docs is a list of document contents
                 docs_list.extend(docs)
-        except Exception as e:
-            gr.Error(f"Failed to load content at {url}: {e}")
+        
+        # Process and save the data to disk
+        try:
+            vectorstore = Chroma.from_documents(
+                documents=docs_list,
+                collection_name="appSignal",
+                embedding=embedding_function,
+                persist_directory=persist_directory
+            )
+            vectorstore.persist()
+            retriever = vectorstore.as_retriever()
+            print("Processed and saved new data successfully.")
+        except TypeError as e:
+            print(f"An error occurred while initializing Chroma: {e}")
+            # Adding more detailed error handling to pinpoint issues
+            print(f"Parameters passed: documents=<{type(docs_list)}>, embedding_function=<{embedding_function}>, persist_directory=<{persist_directory}>")
+            return "An error occurred while processing documents. Please check the logs for more details."
 
-    # Process each document content directly
-    text_splitter = CharacterTextSplitter.from_tiktoken_encoder(chunk_size=7500, chunk_overlap=100)
-    doc_splits = text_splitter.split_documents(docs_list)
-
-    vectorstore = Chroma.from_documents(
-        documents=doc_splits,
-        collection_name="KnowledgeVectors",
-        embedding=embedding,
-    )
-    retriever = vectorstore.as_retriever()
-
-    # Check if the vectorstore and retriever have been successfully created
+    # Proceed with using the data
     if vectorstore and retriever:
-        gr.Info('The documents have been processed and are ready to be used with the model.')
-        return "The documents and videos have been processed and are ready for your queries."
+        return "The documents have been processed and are ready to be used with the model."
     else:
-        gr.Error("There was an error. Please check the inputs or try again later.")
-        return "There was an issue processing the documents and videos. Please check the inputs or try again later."
+        return "There was an issue processing the documents. Please check the inputs or try again later."
 
-def generate_learning_material():
+def generate_learning_material(article_title, article_section):
     global retriever, vectorstore, model_local, global_is_product_review
     # Load LLM model
-    model_local = ChatOllama(model="mistral")
+    model_local = ChatOllama(model="llama3")
     if global_is_product_review == "Yes":
         template = """
             You are tasked with creating an engaging, informative overview that introduces developers to the product explained in the context in a structured manner::
@@ -81,45 +172,17 @@ def generate_learning_material():
             Ensure the material is structured to be clear, concise, and practical, often focusing on real-world applications. Use markdown styling to make the content visually appealing and easy to follow, with titles for each section, highlighted key points, and well-separated sections for readability.
         """ 
     else:
-        template = """
-            You are the best software engineering instructor and is the most famous one who can explain complex topic in simple way that everyone can understand and also provides great examples for topic,
-            I need your help in creating an easy to understand, engaging and detailed course only based on the following context:
-            Context:\n{context}
-            Some of the aspect of the course should be:
-            - Summarization: Summarize the main topics covered in the context. Aim for simple explanation, engaging and clarity and brevity to capture the essence of the content.
-            - Explanation with Code: Select key concepts from the document and demonstrate each with a relevant code snippet. Provide a brief explanation for how each snippet exemplifies the concept, ensuring the explanation enhances understanding.
-            - Verify Understanding using questions and answers
-            - Engage with Hands-on Coding:
-                - Propose coding challenges that require applying knowledge from the document. Challenges could range from debugging exercises to developing new code based on the concepts learned.
-                - For each challenge, include context and specify what success looks like. If appropriate, provide starter code and a solution for self-verification.
-
-            The course should be in markdown format (don't add ```markdown in the beginning of the content you are providing, nor ``` at the end of the content, i only need markdown syntax) and following a precise hierarchy. 
-            The course should have 3 level hierarchy, we have sections which are heading 2, we have subsections which are heading 3 and the learning content, like text, code snippet, images etc which are inside the heading 3 (subsections).
-            Each section and subsection should have engaging and explainatory name and each course only have one heading 1 which is used as course name, an example of the course hirearchy is 
-            ------
-            # Python for beginners
-            ## Introduction
-            ### Some of Python's notable feature
-                Python is a clear and powerful object-oriented programming language, comparable to Perl, Ruby, Scheme, or Java.
-                - Uses an elegant syntax, making the programs you write easier to read.
-                - Is an easy-to-use language that makes it simple to get your program working. This makes Python ideal for prototype development and other ad-hoc programming tasks, without compromising maintainability.
-                - Comes with a large standard library that supports many common programming tasks such as connecting to web servers, searching text with regular expressions, reading and modifying files.
-                - Python's interactive mode makes it easy to test short snippets of code. There's also a bundled development environment called IDLE.
-                - Is easily extended by adding new modules implemented in a compiled language such as C or C++.
-            we repeat the same patter for heading 2, heading 3 and content. content never goes out of the heading 3.
-            ------
-            At the end of the course please provide a couple of coding practices 
-            Coding practices sections should be like
-            ## Coding practice
-            ### Practice title
-            content of the practice
-            ------
-            Remember:
-            - The course must contain exactly one H1 heading.
-            - Multiple H2 headings (sections) and H3 headings (subsections) are allowed and expected.
-            - All educational content, including text, code, practices, and quizzes, should be within an H3 heading (subsections).
-        """ 
-
+        template = f"""
+            You are the best software engineering instructor, technical writer with excellent capability on explaining complex topics in simple way with examples an din a way that everyone can understand.
+            You are also Open edX expert with speciality on integrating Open edX with third part systems.
+            I need your help in creating an easy to understand, engaging and detailed technical article only based on the following context:
+            Context:\n{{context}}
+            Help me out to write this technical article, we should explain to the users step by step how to do this implementation with Open edX so they can do it by themselves.
+            We should provide detailed code as well.
+            The article should be in markdown format.
+            The article title is {article_title}.
+            Lets start with {article_section}
+        """
     prompt = ChatPromptTemplate.from_template(template)
     chain = (
         {"context": retriever}
@@ -149,7 +212,7 @@ def review_code(code):
     global vectorstore
 
     # Load LLM model
-    model_local = ChatOllama(model="mistral")
+    model_local = ChatOllama(model="llama3")
     template = """
         You are expert software engineer and code reviewer. Use the context provided and your experties and review my code and provide the following
         this is the Context:\n{context}
@@ -223,39 +286,19 @@ def main():
             # Markdown instructions for Step 2
             gr.Markdown("""
             ## Step 2: Interact with the Model
-            Now that your data is ready, let's generate our learning material:
-                - This is a **Retrieval-Augmented Generation (RAG)** application. It does not make up answers, and strives to provide accurate and reliable information.
-
             ---
             """)
-
-            with gr.Row():
-                with gr.Column():
-                    learning_material = gr.Markdown(
-                        label="Learning Content",
-                        value="# Learning Material"
-                    )
-                    clear_button = gr.ClearButton(components=[learning_material])
-                    submit_button = gr.Button(
-                        value="Generate Learning Material",
-                        variant="primary"
-                    ).click(generate_learning_material, outputs=learning_material)
-                with gr.Column():
-                    playground = gr.Code(
-                        label="Playground",
-                        language="python",
-                        interactive=True,
-                        show_label=True,
-                    )
-                    chat_box = gr.Markdown(
-                        label="Chat History",
-                        show_label=True,
-                    )
-                    review_code_button = gr.Button(
-                        value="Review My Code",
-                        variant="primary",
-                        elem_id="review_code_button"
-                    ).click(review_code, inputs=playground, outputs=chat_box)
+            article_title = gr.Textbox(placeholder="What is the article's title ?")
+            article_section = gr.Textbox(placeholder="Which section you are working on ?", lines=10)
+            learning_material = gr.Markdown(
+                label="Learning Content",
+                value="# Learning Material"
+            )
+            clear_button = gr.ClearButton(components=[learning_material])
+            submit_button = gr.Button(
+                value="Generate Learning Material",
+                variant="primary"
+            ).click(generate_learning_material, inputs=[article_title, article_section], outputs=learning_material)
     interface.queue(max_size=10)
     return interface
 
