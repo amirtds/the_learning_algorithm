@@ -25,11 +25,23 @@ vectorstore = None
 ids = None
 global_is_product_review = "No"
 
-# Load LLM model
-model_local = ChatOllama(model="llama3")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# This pattern ensures the model is loaded only once.
+class SingletonOllamaModel:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            logging.info("Loading Llama model...")
+            cls._instance = ChatOllama(model="llama3")
+        return cls._instance
+
+# Load LLM model
+model_local = model_local = SingletonOllamaModel.get_instance()
 
 def safe_request(url):
     """Fetch the webpage content using a randomized user-agent to simulate different browsers."""
