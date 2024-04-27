@@ -306,9 +306,9 @@ def main():
                 value="Generate Learning Material",
                 variant="primary"
             ).click(generate_learning_material, inputs=[article_title, article_section], outputs=learning_material)
-    interface.queue(max_size=1)
+    interface.queue(max_size=1, default_concurrency_limit=1)
     return interface
 
 # Launch the interface
 if __name__ == "__main__":
-    main().launch(show_api=True, default_concurrency_limit=1)
+    main().launch(show_api=True, max_threads=5)
