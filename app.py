@@ -294,7 +294,7 @@ def main():
                 value="Generate Learning Material",
                 variant="primary"
             ).click(generate_learning_material, inputs=[article_title, article_section], outputs=learning_material)
-    interface.queue(max_size=10)
+    interface.queue(max_size=1)
     return interface
 
 # Launch the interface
