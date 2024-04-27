@@ -160,8 +160,6 @@ def prepare_embeddings(root_url, is_product_review):
 
 def generate_learning_material(article_title, article_section):
     global retriever, vectorstore, model_local, global_is_product_review
-    # Load LLM model
-    model_local = ChatOllama(model="llama3")
     if global_is_product_review == "Yes":
         template = """
             You are tasked with creating an engaging, informative overview that introduces developers to the product explained in the context in a structured manner::
@@ -208,11 +206,8 @@ def clean_db():
         return f"An error occurred: {str(e)}"
 
 def review_code(code):
-    global retriever
-    global vectorstore
+    global retriever, vectorstore, model_local
 
-    # Load LLM model
-    model_local = ChatOllama(model="llama3")
     template = """
         You are expert software engineer and code reviewer. Use the context provided and your experties and review my code and provide the following
         this is the Context:\n{context}
